@@ -17,7 +17,7 @@ return new class extends Migration
             $table->string('title');
             $table->string('project_type');
             $table->string('status')->default('draft'); // draft/submitted/reviewed/approved/rejected/closed
-            $table->decimal('budget_target', 15, 2)->nullable();
+            $table->decimal('budget_target', 12, 2)->nullable();
             $table->text('notes')->nullable();
             $table->timestamps();
         });
