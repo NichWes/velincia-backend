@@ -22,4 +22,8 @@ class Project extends Model
     public function items() {
         return $this->hasMany(ProjectItem::class);
     }
+
+    public function orders() {
+        return $this->hasMany(Order::class);
+    }
 }
