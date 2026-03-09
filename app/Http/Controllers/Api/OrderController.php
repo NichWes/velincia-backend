@@ -14,8 +14,7 @@ use Illuminate\Validation\Rule;
 
 class OrderController extends Controller
 {
-    public function index()
-    {
+    public function index() {
         $orders = Order::where('user_id', auth()->id())
             ->with('project')
             ->latest()
@@ -24,10 +23,11 @@ class OrderController extends Controller
         return response()->json($orders);
     }
 
-    public function show(Order $order)
-    {
+    public function show(Order $order) {
         if ($order->user_id !== auth()->id()) {
-            return response()->json(['message' => 'Unauthorized'], 403);
+            return response()->json([
+                'message' => 'Unauthorized'
+            ], 403);
         }
 
         return response()->json(
@@ -35,16 +35,12 @@ class OrderController extends Controller
         );
     }
 
-    // CREATE DRAFT ORDER
-    // POST /orders
-    public function store(Request $request)
-    {
+    public function store(Request $request) {
         $data = $request->validate([
             'project_id' => ['required', 'exists:projects,id'],
             'order_type' => ['nullable', Rule::in(['partial', 'full'])],
             'delivery_method' => ['nullable', Rule::in(['pickup', 'delivery'])],
             'delivery_address' => ['nullable', 'string'],
-
             'items' => ['required', 'array', 'min:1'],
             'items.*.project_item_id' => ['required', 'integer', 'exists:project_items,id'],
             'items.*.qty' => ['required', 'integer', 'min:1'],
@@ -55,10 +51,13 @@ class OrderController extends Controller
             ->first();
 
         if (!$project) {
-            return response()->json(['message' => 'Project not found/unauthorized'], 404);
+            return response()->json([
+                'message' => 'Project not found/unauthorized'
+            ], 404);
         }
 
         $deliveryMethod = $data['delivery_method'] ?? 'pickup';
+
         if ($deliveryMethod === 'delivery' && empty($data['delivery_address'])) {
             return response()->json([
                 'message' => 'delivery_address wajib diisi jika delivery_method = delivery'
@@ -70,7 +69,6 @@ class OrderController extends Controller
         $requestedItems = collect($data['items']);
         $projectItemIds = $requestedItems->pluck('project_item_id')->all();
 
-        // Cegah project_item_id duplikat dalam 1 order
         if (count($projectItemIds) !== count(array_unique($projectItemIds))) {
             return response()->json([
                 'message' => 'project_item_id tidak boleh duplikat dalam satu order'
@@ -89,7 +87,6 @@ class OrderController extends Controller
             ], 422);
         }
 
-        // Validasi qty tiap item
         foreach ($data['items'] as $requestedItem) {
             $projectItemId = (int) $requestedItem['project_item_id'];
             $qtyRequested = (int) $requestedItem['qty'];
@@ -134,12 +131,10 @@ class OrderController extends Controller
                 'order_code' => $orderCode,
                 'order_type' => $orderType,
                 'status' => Order::STATUS_DRAFT,
-
                 'delivery_method' => $deliveryMethod,
                 'delivery_address' => $deliveryMethod === 'delivery'
                     ? ($data['delivery_address'] ?? null)
                     : null,
-
                 'subtotal' => 0,
                 'shipping_fee' => null,
                 'total_amount' => 0,
@@ -152,7 +147,6 @@ class OrderController extends Controller
                 $qtyRequested = (int) $requestedItem['qty'];
 
                 $pi = $projectItems->get($projectItemId);
-
                 $nameSnapshot = $this->resolveItemName($pi);
 
                 $unitPrice = $pi->material?->price_estimate;
@@ -184,19 +178,23 @@ class OrderController extends Controller
         });
     }
 
-    // USER SUBMIT ORDER: draft -> waiting_admin
-    public function submit(Order $order)
-    {
+    public function submit(Order $order) {
         if ($order->user_id !== auth()->id()) {
-            return response()->json(['message' => 'Unauthorized'], 403);
+            return response()->json([
+                'message' => 'Unauthorized'
+            ], 403);
         }
 
         if ($order->status !== Order::STATUS_DRAFT) {
-            return response()->json(['message' => 'Order bukan status draft'], 422);
+            return response()->json([
+                'message' => 'Order bukan status draft'
+            ], 422);
         }
 
         if ($order->items()->count() === 0) {
-            return response()->json(['message' => 'Order tidak memiliki item'], 422);
+            return response()->json([
+                'message' => 'Order tidak memiliki item'
+            ], 422);
         }
 
         $order->update([
@@ -210,10 +208,6 @@ class OrderController extends Controller
     }
 
     public function adminAdjust(Request $request, Order $order) {
-        if (auth()->user()->role !== 'admin') {
-            return response()->json(['message' => 'Admin only'], 403);
-        }
-
         if ($order->status !== Order::STATUS_WAITING_ADMIN) {
             return response()->json([
                 'message' => 'Order hanya bisa direvisi saat status waiting_admin'
@@ -232,7 +226,6 @@ class OrderController extends Controller
             ->get()
             ->keyBy('id');
 
-        // VALIDASI 
         $remainingActiveItems = $orderItems->count();
 
         foreach ($data['items'] as $payload) {
@@ -319,13 +312,6 @@ class OrderController extends Controller
     }
 
     public function setWaitingPayment(Request $request, Order $order) {
-        // nanti set admin only
-        // sementara bisa dipakai untuk testing
-
-        if (auth()->user()->role !== 'admin') {
-            return response()->json(['message' => 'Admin only'], 403);
-        }
-
         $data = $request->validate([
             'shipping_fee' => ['nullable', 'numeric', 'min:0'],
         ]);
@@ -357,15 +343,17 @@ class OrderController extends Controller
         ]);
     }
 
-    // TEMP: mark paid (nanti diganti callback Midtrans)
-    public function markPaid(Order $order)
-    {
+    public function markPaid(Order $order) {
         if ($order->user_id !== auth()->id()) {
-            return response()->json(['message' => 'Unauthorized'], 403);
+            return response()->json([
+                'message' => 'Unauthorized'
+            ], 403);
         }
 
         if ($order->status !== Order::STATUS_WAITING_PAYMENT) {
-            return response()->json(['message' => 'Order belum waiting_payment'], 422);
+            return response()->json([
+                'message' => 'Order belum waiting_payment'
+            ], 422);
         }
 
         $order->update([
@@ -379,11 +367,10 @@ class OrderController extends Controller
     }
 
     public function applyToProjectItems(Order $order) {
-        // sementara owner order untuk testing
-        // nanti admin only / system callback only
-
         if ($order->user_id !== auth()->id()) {
-            return response()->json(['message' => 'Unauthorized'], 403);
+            return response()->json([
+                'message' => 'Unauthorized'
+            ], 403);
         }
 
         if (!in_array($order->status, [Order::STATUS_PAID, Order::STATUS_PROCESSING])) {
@@ -420,7 +407,6 @@ class OrderController extends Controller
 
                 $newPurchased = $currentPurchased + $qtyToApply;
 
-                // agar tidak melebihi qty_needed
                 if ($newPurchased > $needed) {
                     $newPurchased = $needed;
                 }
@@ -457,8 +443,7 @@ class OrderController extends Controller
         return ProjectItem::STATUS_PARTIAL;
     }
 
-    private function resolveItemName(ProjectItem $projectItem): string
-    {
+    private function resolveItemName(ProjectItem $projectItem): string {
         if ($projectItem->material) {
             return trim(
                 ($projectItem->material->name ?? '') . ' ' . ($projectItem->material->variant ?? '')

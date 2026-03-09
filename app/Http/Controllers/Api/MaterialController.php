@@ -28,14 +28,14 @@ class MaterialController extends Controller
             'brand' => 'nullable|string|max:100',
             'variant' => 'nullable|string|max:100',
             'unit' => 'required|string|max:20',
-            'price_estimate' => 'nullable|numeric|min:0'
+            'price_estimate' => 'nullable|numeric|min:0',
         ]);
 
         $material = Material::create($data);
 
         return response()->json([
             'message' => 'Material created',
-            'material' => $material
+            'material' => $material,
         ], 201);
     }
 
@@ -47,21 +47,24 @@ class MaterialController extends Controller
             'variant' => 'nullable|string|max:100',
             'unit' => 'sometimes|string|max:20',
             'price_estimate' => 'nullable|numeric|min:0',
-            'is_active' => 'boolean'
+            'is_active' => 'boolean',
         ]);
 
         $material->update($data);
 
-        return response()->json($material);
+        return response()->json([
+            'message' => 'Material updated',
+            'material' => $material->fresh(),
+        ]);
     }
 
     public function destroy(Material $material) {
         $material->update([
-            'is_active' => false
+            'is_active' => false,
         ]);
 
         return response()->json([
-            'message' => 'Material deactivated'
+            'message' => 'Material deactivated',
         ]);
     }
 }
