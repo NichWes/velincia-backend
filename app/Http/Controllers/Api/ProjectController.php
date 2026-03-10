@@ -25,7 +25,7 @@ class ProjectController extends Controller
             'project_type' => $data['project_type'] ?? null,
             'budget_target' => $data['budget_target'] ?? null,
             'notes' => $data['notes'] ?? null,
-            // status default dari migration (draft)
+            'status' => Project::STATUS_DRAFT,
         ]);
 
         return response()->json([

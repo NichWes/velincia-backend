@@ -366,69 +366,180 @@ class OrderController extends Controller
         ]);
     }
 
-    public function applyToProjectItems(Order $order) {
-        if ($order->user_id !== auth()->id()) {
+    public function process(Order $order) {
+        if ($order->status !== Order::STATUS_PAID) {
             return response()->json([
-                'message' => 'Unauthorized'
-            ], 403);
-        }
-
-        if (!in_array($order->status, [Order::STATUS_PAID, Order::STATUS_PROCESSING])) {
-            return response()->json([
-                'message' => 'Order harus status paid atau processing'
+                'message' => 'Order harus status paid untuk masuk ke processing'
             ], 422);
         }
 
-        if ($order->is_applied_to_project) {
+        $order->update([
+            'status' => Order::STATUS_PROCESSING,
+        ]);
+
+        return response()->json([
+            'message' => 'Order moved to processing',
+            'order' => $order->fresh()->load(['items.material', 'items.projectItem', 'project'])
+        ]);
+    }
+
+    public function ship(Order $order) {
+        if ($order->status !== Order::STATUS_PROCESSING) {
             return response()->json([
-                'message' => 'Order ini sudah pernah diaplikasikan ke project items'
+                'message' => 'Order harus status processing untuk dikirim'
             ], 422);
         }
 
-        if ($order->items()->count() === 0) {
+        if ($order->delivery_method !== 'delivery') {
             return response()->json([
-                'message' => 'Order tidak memiliki item'
+                'message' => 'Hanya order delivery yang bisa diubah ke shipped'
+            ], 422);
+        }
+
+        $order->update([
+            'status' => Order::STATUS_SHIPPED,
+        ]);
+
+        return response()->json([
+            'message' => 'Order shipped',
+            'order' => $order->fresh()->load(['items.material', 'items.projectItem', 'project'])
+        ]);
+    }
+
+    public function readyPickup(Order $order)
+{
+        if ($order->status !== Order::STATUS_PROCESSING) {
+            return response()->json([
+                'message' => 'Order harus status processing untuk siap pickup'
+            ], 422);
+        }
+
+        if ($order->delivery_method !== 'pickup') {
+            return response()->json([
+                'message' => 'Hanya order pickup yang bisa diubah ke ready_pickup'
+            ], 422);
+        }
+
+        $order->update([
+            'status' => Order::STATUS_READY_PICKUP,
+        ]);
+
+        return response()->json([
+            'message' => 'Order ready for pickup',
+            'order' => $order->fresh()->load(['items.material', 'items.projectItem', 'project'])
+        ]);
+    }
+
+    public function complete(Order $order)
+    {
+        if (!in_array($order->status, [Order::STATUS_SHIPPED, Order::STATUS_READY_PICKUP])) {
+            return response()->json([
+                'message' => 'Order harus status shipped atau ready_pickup untuk diselesaikan'
             ], 422);
         }
 
         return DB::transaction(function () use ($order) {
-            $orderItems = $order->items()->with('projectItem')->get();
-
-            foreach ($orderItems as $orderItem) {
-                $projectItem = $orderItem->projectItem;
-
-                if (!$projectItem) {
-                    continue;
-                }
-
-                $currentPurchased = (int) $projectItem->qty_purchased;
-                $qtyToApply = (int) $orderItem->qty;
-                $needed = (int) $projectItem->qty_needed;
-
-                $newPurchased = $currentPurchased + $qtyToApply;
-
-                if ($newPurchased > $needed) {
-                    $newPurchased = $needed;
-                }
-
-                $newStatus = $this->calculateProjectItemStatus($needed, $newPurchased);
-
-                $projectItem->update([
-                    'qty_purchased' => $newPurchased,
-                    'status' => $newStatus,
-                ]);
+            if (!$order->is_applied_to_project) {
+                $this->applyOrderItemsToProject($order);
             }
 
             $order->update([
-                'is_applied_to_project' => true,
-                'applied_to_project_at' => now(),
+                'status' => Order::STATUS_COMPLETED,
             ]);
 
             return response()->json([
-                'message' => 'Order berhasil diaplikasikan ke project items',
-                'order' => $order->fresh()->load(['items.projectItem', 'project']),
+                'message' => 'Order completed',
+                'order' => $order->fresh()->load(['items.material', 'items.projectItem', 'project'])
             ]);
         });
+    }
+
+    public function cancel(Order $order)
+    {
+        if (!in_array($order->status, [
+            Order::STATUS_DRAFT,
+            Order::STATUS_WAITING_ADMIN,
+            Order::STATUS_WAITING_PAYMENT,
+        ])) {
+            return response()->json([
+                'message' => 'Order hanya bisa dibatalkan saat status draft, waiting_admin, atau waiting_payment'
+            ], 422);
+        }
+
+        $order->update([
+            'status' => Order::STATUS_CANCELLED,
+        ]);
+
+        return response()->json([
+            'message' => 'Order cancelled',
+            'order' => $order->fresh()->load(['items.material', 'items.projectItem', 'project'])
+        ]);
+    }
+
+    private function applyOrderItemsToProject(Order $order): void{
+        $orderItems = $order->items()->with('projectItem')->get();
+
+        foreach ($orderItems as $orderItem) {
+            $projectItem = $orderItem->projectItem;
+
+            if (!$projectItem) {
+                continue;
+            }
+
+            $currentPurchased = (int) $projectItem->qty_purchased;
+            $qtyToApply = (int) $orderItem->qty;
+            $needed = (int) $projectItem->qty_needed;
+
+            $newPurchased = $currentPurchased + $qtyToApply;
+
+            if ($newPurchased > $needed) {
+                $newPurchased = $needed;
+            }
+
+            $newStatus = $this->calculateProjectItemStatus($needed, $newPurchased);
+
+            $projectItem->update([
+                'qty_purchased' => $newPurchased,
+                'status' => $newStatus,
+            ]);
+        }
+
+        $order->update([
+            'is_applied_to_project' => true,
+            'applied_to_project_at' => now(),
+        ]);
+        
+        $this->refreshProjectStatus($order);
+    }
+
+    private function refreshProjectStatus(Order $order): void {
+        $project = $order->project;
+
+        if (!$project) {
+            return;
+        }
+
+        $items = $project->items()->get();
+
+        if ($items->isEmpty()) {
+            $project->update([
+                'status' => Project::STATUS_DRAFT,
+            ]);
+            return;
+        }
+
+        $allCompleted = $items->every(function ($item) {
+            return in_array($item->status, [
+                ProjectItem::STATUS_COMPLETE,
+                ProjectItem::STATUS_SUBSTITUTED,
+            ]);
+        });
+
+        $project->update([
+            'status' => $allCompleted
+                ? Project::STATUS_COMPLETED
+                : Project::STATUS_ACTIVE,
+        ]);
     }
 
     private function calculateProjectItemStatus(int $needed, int $purchased): string {

@@ -35,7 +35,6 @@ class ProjectItemController extends Controller
             'notes' => ['nullable', 'string'],
         ]);
 
-        // enforce: material_id OR custom_name wajib ada
         if (empty($data['material_id']) && empty($data['custom_name'])) {
             return response()->json([
                 'message' => 'material_id atau custom_name wajib diisi'
@@ -56,13 +55,15 @@ class ProjectItemController extends Controller
 
         // auto status (kalau status tidak dikirim)
         $data['status'] = $data['status'] ?? $this->calculateStatus($data['qty_needed'], $data['qty_purchased']);
-
+        
         $item = ProjectItem::create($data);
 
-        return response()->json(
-            $item->load('material'),
-            201
-        );
+        $this->refreshProjectStatus($project);
+
+        return response()->json([
+            'message' => 'Project item created',
+            'item' => $item->load('material'),
+        ], 201);
     }
 
     // fungsi patch update (/project-items/{item})
@@ -104,6 +105,8 @@ class ProjectItemController extends Controller
 
         $item->update($data);
 
+        $this->refreshProjectStatus($item->project);
+
         return response()->json($item->fresh()->load('material'));
     }
 
@@ -111,7 +114,11 @@ class ProjectItemController extends Controller
     public function destroy(ProjectItem $item)  {
         $this->authorizeProject($item->project);
 
+        $project = $item->project;
+
         $item->delete();
+
+        $this->refreshProjectStatus($project);
 
         return response()->json(['message' => 'Deleted']);
     }
@@ -122,10 +129,39 @@ class ProjectItemController extends Controller
         }
     }
 
-     private function calculateStatus(int $needed, int $purchased): string
-    {
-        if ($purchased <= 0) return 'not_bought';
-        if ($purchased >= $needed) return 'complete';
-        return 'partial';
+     private function calculateStatus(int $needed, int $purchased): string {
+            if ($purchased <= 0) {
+            return ProjectItem::STATUS_NOT_BOUGHT;
+        }
+
+        if ($purchased >= $needed) {
+            return ProjectItem::STATUS_COMPLETE;
+        }
+
+        return ProjectItem::STATUS_PARTIAL;
+    }
+
+    private function refreshProjectStatus(Project $project): void {
+        $items = $project->items()->get();
+
+        if ($items->isEmpty()) {
+            $project->update([
+                'status' => Project::STATUS_DRAFT,
+            ]);
+            return;
+        }
+
+        $allCompleted = $items->every(function ($item) {
+            return in_array($item->status, [
+                ProjectItem::STATUS_COMPLETE,
+                ProjectItem::STATUS_SUBSTITUTED,
+            ]);
+        });
+
+        $project->update([
+            'status' => $allCompleted
+                ? Project::STATUS_COMPLETED
+                : Project::STATUS_ACTIVE,
+        ]);
     }
 }

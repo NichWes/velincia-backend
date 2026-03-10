@@ -16,7 +16,7 @@ return new class extends Migration
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
             $table->string('title');
             $table->string('project_type');
-            $table->string('status')->default('draft'); // draft/submitted/reviewed/approved/rejected/closed
+            $table->string('status')->default('draft'); // draft/active/completed/cancelled
             $table->decimal('budget_target', 12, 2)->nullable();
             $table->text('notes')->nullable();
             $table->timestamps();
