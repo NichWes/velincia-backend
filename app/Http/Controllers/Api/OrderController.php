@@ -344,12 +344,6 @@ class OrderController extends Controller
     }
 
     public function markPaid(Order $order) {
-        if ($order->user_id !== auth()->id()) {
-            return response()->json([
-                'message' => 'Unauthorized'
-            ], 403);
-        }
-
         if ($order->status !== Order::STATUS_WAITING_PAYMENT) {
             return response()->json([
                 'message' => 'Order belum waiting_payment'
@@ -509,16 +503,12 @@ class OrderController extends Controller
             'applied_to_project_at' => now(),
         ]);
         
-        $this->refreshProjectStatus($order);
+        if ($order->project) {
+            $this->refreshProjectStatus($order->project);
+        }
     }
 
-    private function refreshProjectStatus(Order $order): void {
-        $project = $order->project;
-
-        if (!$project) {
-            return;
-        }
-
+    private function refreshProjectStatus(Project $project): void {
         $items = $project->items()->get();
 
         if ($items->isEmpty()) {

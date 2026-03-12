@@ -33,15 +33,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::patch('/project-items/{item}', [ProjectItemController::class, 'update']);
     Route::delete('/project-items/{item}', [ProjectItemController::class, 'destroy']);
 
-    // orders - user/contractor side
+    // orders - contractor side
     Route::get('/orders', [OrderController::class, 'index']);
     Route::get('/orders/{order}', [OrderController::class, 'show']);
     Route::post('/orders', [OrderController::class, 'store']);
     Route::post('/orders/{order}/submit', [OrderController::class, 'submit']);
-
-    // sementara masih di auth biasa 
-    // nanti dapat dipindah jika ada webhook/payment internal 
-    Route::post('/orders/{order}/mark-paid', [OrderController::class, 'markPaid']);
 });
 
 // admin only routes
@@ -54,11 +50,10 @@ Route::middleware(['auth:sanctum', 'admin'])->group(function () {
     // admin order actions
     Route::post('/orders/{order}/admin-adjust', [OrderController::class, 'adminAdjust']);
     Route::post('/orders/{order}/set-waiting-payment', [OrderController::class, 'setWaitingPayment']);
+    Route::post('/orders/{order}/mark-paid', [OrderController::class, 'markPaid']);
     Route::post('/orders/{order}/process', [OrderController::class, 'process']);
     Route::post('/orders/{order}/ship', [OrderController::class, 'ship']);
     Route::post('/orders/{order}/ready-pickup', [OrderController::class, 'readyPickup']);
     Route::post('/orders/{order}/complete', [OrderController::class, 'complete']);
     Route::post('/orders/{order}/cancel', [OrderController::class, 'cancel']);
-
-    // Route::post('/orders/{order}/mark-paid', [OrderController::class, 'markPaid']);
 });
