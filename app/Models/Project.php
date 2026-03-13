@@ -16,12 +16,12 @@ class Project extends Model
     ];
 
     public const STATUS_DRAFT = 'draft';
-    public const STATUS_ACTIVE = 'active';
+    public const STATUS_ACTIVE = 'active';  
     public const STATUS_COMPLETED = 'completed';
     public const STATUS_CANCELLED = 'cancelled';
 
     public function user() {
-        return $this -> belongsTo(User::class);
+        return $this->belongsTo(User::class);
     }
 
     public function items() {

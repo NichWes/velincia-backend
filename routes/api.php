@@ -46,6 +46,11 @@ Route::middleware(['auth:sanctum', 'admin'])->group(function () {
     Route::post('/materials', [MaterialController::class, 'store']);
     Route::patch('/materials/{material}', [MaterialController::class, 'update']);
     Route::delete('/materials/{material}', [MaterialController::class, 'destroy']);
+    
+    // admin monitoring
+    Route::get('/admin/orders', [OrderController::class, 'adminIndex']);
+    Route::get('/admin/orders/{order}', [OrderController::class, 'adminShow']);
+    Route::get('/admin/dashboard', [OrderController::class, 'adminDashboard']);
 
     // admin order actions
     Route::post('/orders/{order}/admin-adjust', [OrderController::class, 'adminAdjust']);

@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\User;
+use App\Models\Material;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Project;
@@ -136,7 +138,7 @@ class OrderController extends Controller
                     ? ($data['delivery_address'] ?? null)
                     : null,
                 'subtotal' => 0,
-                'shipping_fee' => null,
+                'shipping_fee' => 0,
                 'total_amount' => 0,
             ]);
 
@@ -470,6 +472,84 @@ class OrderController extends Controller
         ]);
     }
 
+    public function adminIndex(Request $request) {
+        $request->validate([
+            'status' => ['nullable', Rule::in([
+                Order::STATUS_DRAFT,
+                Order::STATUS_WAITING_ADMIN,
+                Order::STATUS_WAITING_PAYMENT,
+                Order::STATUS_PAID,
+                Order::STATUS_PROCESSING,
+                Order::STATUS_SHIPPED,
+                Order::STATUS_READY_PICKUP,
+                Order::STATUS_COMPLETED,
+                Order::STATUS_CANCELLED,
+            ])],
+            'delivery_method' => ['nullable', Rule::in(['pickup', 'delivery'])],
+            'order_code' => ['nullable', 'string'],
+        ]);
+
+        $query = Order::with(['project', 'user'])->withCount('items')
+            ->latest();
+
+        if ($request->filled('status')) {
+            $query->where('status', $request->status);
+        }
+
+        if ($request->filled('delivery_method')) {
+            $query->where('delivery_method', $request->delivery_method);
+        }
+
+        if ($request->filled('order_code')) {
+            $query->where('order_code', 'like', '%' . $request->order_code . '%');
+        }
+
+        $orders = $query->paginate(10);
+
+        return response()->json($orders);
+    }
+
+    public function adminShow(Order $order) {
+        return response()->json(
+            $order->load(['items.material', 'items.projectItem', 'project', 'user'])
+        );
+    }
+
+    public function adminDashboard() {
+        $data = [
+            'waiting_admin' => Order::where('status', Order::STATUS_WAITING_ADMIN)->count(),
+            'waiting_payment' => Order::where('status', Order::STATUS_WAITING_PAYMENT)->count(),
+            'paid' => Order::where('status', Order::STATUS_PAID)->count(),
+            'processing' => Order::where('status', Order::STATUS_PROCESSING)->count(),
+            'shipped' => Order::where('status', Order::STATUS_SHIPPED)->count(),
+            'ready_pickup' => Order::where('status', Order::STATUS_READY_PICKUP)->count(),
+            'completed' => Order::where('status', Order::STATUS_COMPLETED)->count(),
+            'cancelled' => Order::where('status', Order::STATUS_CANCELLED)->count(),
+            'total_orders' => Order::count(),
+            'total_revenue_completed' => (float) Order::where('status', Order::STATUS_COMPLETED)->sum('total_amount'),
+
+            'total_active_projects' => Project::where('status', Project::STATUS_ACTIVE)->count(),
+            'total_completed_projects' => Project::where('status', Project::STATUS_COMPLETED)->count(),
+
+            'total_contractors' => User::where('role', 'contractor')->count(),
+
+            'recent_orders' => Order::with(['project', 'user'])
+                ->latest()
+                ->take(5)
+                ->get(),
+
+            'top_materials' => Material::select('materials.id', 'materials.name', 'materials.variant')
+                ->join('order_items', 'order_items.material_id', '=', 'materials.id')
+                ->selectRaw('SUM(order_items.qty) as total_ordered_qty')
+                ->groupBy('materials.id', 'materials.name', 'materials.variant')
+                ->orderByDesc('total_ordered_qty')
+                ->take(5)
+                ->get(),
+        ];
+
+        return response()->json($data);
+    }
+
     private function applyOrderItemsToProject(Order $order): void{
         $orderItems = $order->items()->with('projectItem')->get();
 
@@ -546,9 +626,10 @@ class OrderController extends Controller
 
     private function resolveItemName(ProjectItem $projectItem): string {
         if ($projectItem->material) {
-            return trim(
-                ($projectItem->material->name ?? '') . ' ' . ($projectItem->material->variant ?? '')
-            );
+            return trim(collect([
+                $projectItem->material->name ?? null,
+                $projectItem->material->variant ?? null,
+            ])->filter()->implode(' '));
         }
 
         return $projectItem->custom_name ?? 'Custom Item';

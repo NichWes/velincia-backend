@@ -16,6 +16,11 @@ class ProjectItem extends Model
         'notes',
     ];
 
+    protected $casts = [
+        'qty_needed' => 'integer',
+        'qty_purchased' => 'integer',
+    ];
+
     public const STATUS_NOT_BOUGHT = 'not_bought';
     public const STATUS_PARTIAL    = 'partial';
     public const STATUS_COMPLETE   = 'complete';

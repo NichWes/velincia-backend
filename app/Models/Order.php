@@ -20,6 +20,14 @@ class Order extends Model {
         'applied_to_project_at',
     ];
 
+    protected $casts = [
+        'subtotal' => 'decimal:2',
+        'shipping_fee' => 'decimal:2',
+        'total_amount' => 'decimal:2',
+        'is_applied_to_project' => 'boolean',
+        'applied_to_project_at' => 'datetime',
+    ];
+
     public const STATUS_DRAFT = 'draft';
     public const STATUS_WAITING_ADMIN = 'waiting_admin';
     public const STATUS_WAITING_PAYMENT = 'waiting_payment';
