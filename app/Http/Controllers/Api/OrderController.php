@@ -9,6 +9,9 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Project;
 use App\Models\ProjectItem;
+use Midtrans\Config;
+use Midtrans\Snap;
+use Midtrans\Notification;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -550,6 +553,165 @@ class OrderController extends Controller
         return response()->json($data);
     }
 
+    public function createPaymentToken(Order $order) {
+        if ($order->status !== Order::STATUS_WAITING_PAYMENT) {
+            return response()->json([
+                'message' => 'Order harus status waiting_payment untuk membuat payment token'
+            ], 422);
+        }
+
+        if ($order->total_amount <= 0) {
+            return response()->json([
+                'message' => 'Total amount tidak valid'
+            ], 422);
+        }
+
+        $order->loadMissing(['user', 'items']);
+        $this->initMidtransConfig();
+
+        $customer = $order->user;
+
+        $params = [
+            'transaction_details' => [
+                'order_id' => $order->order_code,
+                'gross_amount' => (int) round($order->total_amount),
+            ],
+            'customer_details' => [
+                'first_name' => $customer->name ?? 'Customer',
+                'email' => $customer->email ?? 'customer@example.com',
+                'phone' => $customer->phone ?? '',
+            ],
+            'item_details' => $order->items->map(function ($item) {
+                return [
+                    'id' => (string) $item->id,
+                    'price' => (int) round($item->unit_price),
+                    'quantity' => (int) $item->qty,
+                    'name' => $item->name_snapshot,
+                ];
+            })->values()->all(),
+            'callbacks' => [
+                'finish' => config('midtrans.finish_url'),
+                'unfinish' => config('midtrans.unfinish_url'),
+                'error' => config('midtrans.error_url'),
+            ],
+        ];
+
+        if ((float) $order->shipping_fee > 0) {
+            $params['item_details'][] = [
+                'id' => 'shipping',
+                'price' => (int) round($order->shipping_fee),
+                'quantity' => 1,
+                'name' => 'Shipping Fee',
+            ];
+        }
+
+        try {
+            $transaction = Snap::createTransaction($params);
+
+            $order->update([
+                'payment_token' => $transaction->token,
+                'payment_url' => $transaction->redirect_url,
+                'transaction_status' => 'token_created',
+            ]);
+
+            return response()->json([
+                'message' => 'Payment token created',
+                'order' => $order->fresh()->load(['items.material', 'items.projectItem', 'project']),
+                'snap_token' => $transaction->token,
+                'payment_url' => $transaction->redirect_url,
+                'client_key' => config('midtrans.client_key'),
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => 'Gagal membuat payment token',
+                'error' => $e->getMessage(),
+                'server_key_exists' => !empty(config('midtrans.server_key')),
+                'server_key_prefix' => substr((string) config('midtrans.server_key'), 0, 13),
+                'client_key_prefix' => substr((string) config('midtrans.client_key'), 0, 13),
+                'is_production' => config('midtrans.is_production'),
+            ], 500);
+        }
+    }
+
+    public function midtransWebhook(Request $request) {
+        $this->initMidtransConfig();
+
+        try {
+            $notification = new Notification();
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => 'Invalid Midtrans notification',
+                'error' => $e->getMessage(),
+            ], 400);
+        }
+
+        $transactionStatus = $notification->transaction_status ?? null;
+        $paymentType = $notification->payment_type ?? null;
+        $fraudStatus = $notification->fraud_status ?? null;
+        $orderCode = $notification->order_id ?? null;
+
+        $order = Order::where('order_code', $orderCode)->first();
+
+        if (!$order) {
+            return response()->json([
+                'message' => 'Order not found'
+            ], 404);
+        }
+
+        $expectedSignature = hash(
+            'sha512',
+            $orderCode .
+            $notification->status_code .
+            $notification->gross_amount .
+            trim((string) config('midtrans.server_key'))
+        );
+
+        if (($notification->signature_key ?? null) !== $expectedSignature) {
+            return response()->json([
+                'message' => 'Invalid signature'
+            ], 403);
+        }
+
+        $updatePayload = [
+            'payment_type' => $paymentType,
+            'transaction_status' => $transactionStatus,
+            'fraud_status' => $fraudStatus,
+        ];
+
+        if ($transactionStatus === 'capture') {
+            if ($paymentType === 'credit_card') {
+                if ($fraudStatus === 'accept') {
+                    $updatePayload['status'] = Order::STATUS_PAID;
+                    $updatePayload['paid_at'] = now();
+                } elseif ($fraudStatus === 'challenge') {
+                    $updatePayload['status'] = Order::STATUS_WAITING_PAYMENT;
+                }
+            }
+        } elseif ($transactionStatus === 'settlement') {
+            $updatePayload['status'] = Order::STATUS_PAID;
+            $updatePayload['paid_at'] = now();
+        } elseif ($transactionStatus === 'pending') {
+            $updatePayload['status'] = Order::STATUS_WAITING_PAYMENT;
+        } elseif (in_array($transactionStatus, ['deny', 'expire', 'cancel'])) {
+            $updatePayload['status'] = Order::STATUS_WAITING_PAYMENT;
+        }   
+
+        if ( in_array($transactionStatus, ['capture', 'settlement']) &&
+            $order->status === Order::STATUS_PAID &&
+            $order->paid_at) {
+            return response()->json([
+                'message' => 'Order already processed as paid'
+            ]);
+        }
+
+        $order->update($updatePayload);
+
+        return response()->json([
+            'message' => 'Notification processed'
+        ]);
+    }
+
     private function applyOrderItemsToProject(Order $order): void{
         $orderItems = $order->items()->with('projectItem')->get();
 
@@ -634,4 +796,13 @@ class OrderController extends Controller
 
         return $projectItem->custom_name ?? 'Custom Item';
     }
+
+    private function initMidtransConfig(): void {
+        Config::$serverKey = trim((string) config('midtrans.server_key'));
+        Config::$clientKey = trim((string) config('midtrans.client_key'));
+        Config::$isProduction = (bool) config('midtrans.is_production');
+        Config::$isSanitized = (bool) config('midtrans.is_sanitized');
+        Config::$is3ds = (bool) config('midtrans.is_3ds');
+    }
+
 }

@@ -8,8 +8,14 @@ use App\Http\Controllers\Api\MaterialController;
 use App\Http\Controllers\Api\OrderController;
 
 // public routes
+Route::get('/ping', function () {
+    return response()->json([
+        'message' => 'pong',
+    ]);
+});
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
+Route::post('/midtrans/webhook', [OrderController::class, 'midtransWebhook']);
 
 // authenticated routes
 Route::middleware('auth:sanctum')->group(function () {
@@ -55,6 +61,7 @@ Route::middleware(['auth:sanctum', 'admin'])->group(function () {
     // admin order actions
     Route::post('/orders/{order}/admin-adjust', [OrderController::class, 'adminAdjust']);
     Route::post('/orders/{order}/set-waiting-payment', [OrderController::class, 'setWaitingPayment']);
+    Route::post('/orders/{order}/create-payment-token', [OrderController::class, 'createPaymentToken']);
     Route::post('/orders/{order}/mark-paid', [OrderController::class, 'markPaid']);
     Route::post('/orders/{order}/process', [OrderController::class, 'process']);
     Route::post('/orders/{order}/ship', [OrderController::class, 'ship']);

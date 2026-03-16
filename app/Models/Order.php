@@ -18,6 +18,12 @@ class Order extends Model {
         'total_amount',
         'is_applied_to_project',
         'applied_to_project_at',
+        'payment_token',
+        'payment_url',
+        'payment_type',
+        'transaction_status',
+        'fraud_status',
+        'paid_at',
     ];
 
     protected $casts = [
@@ -26,6 +32,7 @@ class Order extends Model {
         'total_amount' => 'decimal:2',
         'is_applied_to_project' => 'boolean',
         'applied_to_project_at' => 'datetime',
+        'paid_at' => 'datetime',
     ];
 
     public const STATUS_DRAFT = 'draft';
