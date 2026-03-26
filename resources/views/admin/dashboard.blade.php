@@ -42,7 +42,7 @@
                         <tr class="border-b">
                             <td class="py-3">{{ $order->order_code }}</td>
                             <td class="py-3">{{ $order->user->name ?? '-' }}</td>
-                            <td class="py-3">{{ $order->project->project_name ?? '-' }}</td>
+                            <td class="py-3">{{ $order->project->title ?? '-' }}</td>
                             <td class="py-3">{{ $order->status }}</td>
                             <td class="py-3">Rp {{ number_format($order->total_amount, 0, ',', '.') }}</td>
                             <td class="py-3">

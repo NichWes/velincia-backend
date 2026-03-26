@@ -34,7 +34,7 @@
                     <tr class="border-b">
                         <td class="px-4 py-3">{{ $order->order_code }}</td>
                         <td class="px-4 py-3">{{ $order->user->name ?? '-' }}</td>
-                        <td class="px-4 py-3">{{ $order->project->project_name ?? '-' }}</td>
+                        <td class="px-4 py-3">{{ $order->project->title ?? '-' }}</td>
                         <td class="px-4 py-3">{{ $order->status }}</td>
                         <td class="px-4 py-3">{{ $order->delivery_method }}</td>
                         <td class="px-4 py-3">Rp {{ number_format($order->total_amount, 0, ',', '.') }}</td>
