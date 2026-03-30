@@ -30,6 +30,9 @@ Route::prefix('admin')->group(function () {
         Route::get('/orders', [AdminOrderController::class, 'index'])->name('admin.orders.index');
         Route::get('/orders/{order}', [AdminOrderController::class, 'show'])->name('admin.orders.show');
 
+        Route::post('/orders/{order}/adjust', [AdminOrderController::class, 'adjust'])->name('admin.orders.adjust');
+        Route::post('/orders/{order}/set-waiting-payment', [AdminOrderController::class, 'setWaitingPayment'])->name('admin.orders.setWaitingPayment');
+
         Route::post('/orders/{order}/process', [AdminOrderController::class, 'process'])->name('admin.orders.process');
         Route::post('/orders/{order}/ship', [AdminOrderController::class, 'ship'])->name('admin.orders.ship');
         Route::post('/orders/{order}/ready-pickup', [AdminOrderController::class, 'readyPickup'])->name('admin.orders.readyPickup');

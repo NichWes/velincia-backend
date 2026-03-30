@@ -15,6 +15,11 @@ class Material extends Model
         'price_estimate',
         'is_active',
     ];
+
+    protected $casts = [
+        'price_estimate' => 'decimal:2',
+        'is_active' => 'boolean',
+    ];
     public function projectItems() {
         return $this->hasMany(ProjectItem::class);
     }
