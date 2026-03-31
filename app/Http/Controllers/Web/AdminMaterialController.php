@@ -89,4 +89,14 @@ class AdminMaterialController extends Controller
             ->route('admin.materials.index')
             ->with('success', 'Material berhasil dinonaktifkan.');
     }
+
+    public function toggleStatus(Material $material) {
+        $material->update([
+            'is_active' => !$material->is_active,
+        ]);
+
+        return redirect()
+            ->route('admin.materials.index')
+            ->with('success', 'Status material berhasil diubah.');
+    }
 }

@@ -80,19 +80,20 @@
                             @endif
                         </td>
                         <td class="px-4 py-3">
-                            <div class="flex items-center gap-3">
+                            <div class="flex items-center gap-3 flex-wrap">
                                 <a href="{{ route('admin.materials.edit', $material) }}"
-                                   class="text-blue-600 hover:underline">
+                                class="text-blue-600 hover:underline">
                                     Edit
                                 </a>
 
                                 <form method="POST"
-                                      action="{{ route('admin.materials.destroy', $material) }}"
-                                      onsubmit="return confirm('Yakin nonaktifkan material ini?')">
+                                    action="{{ route('admin.materials.toggleStatus', $material) }}"
+                                    onsubmit="return confirm('{{ $material->is_active ? 'Nonaktifkan' : 'Aktifkan kembali' }} material ini?')">
                                     @csrf
-                                    @method('DELETE')
-                                    <button type="submit" class="text-red-600 hover:underline">
-                                        Nonaktifkan
+                                    @method('PATCH')
+
+                                    <button type="submit" class="{{ $material->is_active ? 'text-red-600' : 'text-green-600' }} hover:underline">
+                                        {{ $material->is_active ? 'Nonaktifkan' : 'Aktifkan' }}
                                     </button>
                                 </form>
                             </div>
@@ -100,8 +101,8 @@
                     </tr>
                 @empty
                     <tr>
-                        <td colspan="8" class="px-4 py-4 text-center text-gray-500">
-                            Belum ada material.
+                        <td colspan="8" class="px-4 py-10 text-center text-gray-500">
+                            Tidak ada material yang cocok dengan filter.
                         </td>
                     </tr>
                 @endforelse

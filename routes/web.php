@@ -45,5 +45,6 @@ Route::prefix('admin')->group(function () {
         Route::get('/materials/{material}/edit', [AdminMaterialController::class, 'edit'])->name('admin.materials.edit');
         Route::put('/materials/{material}', [AdminMaterialController::class, 'update'])->name('admin.materials.update');
         Route::delete('/materials/{material}', [AdminMaterialController::class, 'destroy'])->name('admin.materials.destroy');
+        Route::patch('/materials/{material}/toggle-status', [AdminMaterialController::class, 'toggleStatus'])->name('admin.materials.toggleStatus');
     });
 });
