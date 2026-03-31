@@ -110,7 +110,7 @@
         </table>
     </div>
 
-    <div class="mt-4">
+    <div class="mt-4 bg-white rounded-xl shadow p-4">
         {{ $materials->links() }}
     </div>
 @endsection

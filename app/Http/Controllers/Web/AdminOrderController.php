@@ -19,7 +19,7 @@ class AdminOrderController extends Controller {
             $query->where('order_code', 'like', '%' . $request->order_code . '%');
         }
 
-        $orders = $query->paginate(10)->withQueryString();
+        $orders = $query->paginate(7)->withQueryString();
 
         return view('admin.orders.index', compact('orders'));
     }

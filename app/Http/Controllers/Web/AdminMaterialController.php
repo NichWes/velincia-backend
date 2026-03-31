@@ -27,7 +27,7 @@ class AdminMaterialController extends Controller
             $query->where('is_active', $request->status);
         }
 
-        $materials = $query->paginate(10)->withQueryString();
+        $materials = $query->paginate(7)->withQueryString();
 
         return view('admin.materials.index', compact('materials'));
     }
