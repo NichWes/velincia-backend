@@ -19,7 +19,7 @@ Route::get('/contact', [CompanyProfileController::class, 'contact'])->name('cont
 Route::prefix('admin')->group(function () {
     Route::middleware('guest')->group(function () {
         Route::get('/login', [AdminAuthController::class, 'showLogin'])->name('admin.login');
-        Route::post('/login', [AdminAuthController::class, 'login'])->name('admin.login.submit');
+        Route::post('/login', [AdminAuthController::class, 'login'])->name('admin.login.submit')->middleware('throttle:5,1');
     });
 
     Route::middleware(['auth', 'admin'])->group(function () {
