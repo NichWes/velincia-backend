@@ -14,7 +14,7 @@ Route::get('/ping', function () {
     ]);
 });
 Route::post('/register', [AuthController::class, 'register']);
-Route::post('/login', [AuthController::class, 'login']);
+Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:5,1');
 Route::post('/midtrans/webhook', [OrderController::class, 'midtransWebhook']);
 
 // authenticated routes
