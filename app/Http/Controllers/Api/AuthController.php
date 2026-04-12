@@ -13,12 +13,12 @@ class AuthController extends Controller
     public function register(Request $request)
     {
         $validated = $request->validate([
-            'name' => ['required','string','max:255'],
-            'phone' => ['nullable','string','max:30'],
-            'email' => ['nullable','email','max:255','unique:users,email'],
-            'password' => ['required','string','min:6'],
-            'company_name' => ['nullable','string','max:255'],
-            'address' => ['nullable','string'],
+            'name' => ['required', 'string', 'max:255'],
+            'phone' => ['nullable', 'string', 'max:30'],
+            'email' => ['required', 'email', 'max:255', 'unique:users,email'],
+            'password' => ['required', 'string', 'min:6', 'confirmed'],
+            'company_name' => ['nullable', 'string', 'max:255'],
+            'address' => ['nullable', 'string'],
         ]);
 
         $user = User::create([
@@ -42,19 +42,24 @@ class AuthController extends Controller
     public function login(Request $request)
     {
         $validated = $request->validate([
-            'email' => ['required','email'],
-            'password' => ['required','string'],
+            'email' => ['required', 'email'],
+            'password' => ['required', 'string'],
         ]);
 
         $user = User::where('email', $validated['email'])->first();
 
-        if (! $user || ! Hash::check($validated['password'], $user->password)) {
+        if (!$user || !Hash::check($validated['password'], $user->password)) {
             throw ValidationException::withMessages([
                 'email' => ['Email atau password salah.'],
             ]);
         }
 
-        // hapus token lama
+        if ($user->role !== 'contractor') {
+            throw ValidationException::withMessages([
+                'email' => ['Akun ini tidak diizinkan login ke aplikasi mobile.'],
+            ]);
+        }
+
         $user->tokens()->delete();
 
         $token = $user->createToken('mobile')->plainTextToken;
@@ -74,7 +79,10 @@ class AuthController extends Controller
 
     public function logout(Request $request)
     {
-        $request->user()->currentAccessToken()->delete();
-        return response()->json(['message' => 'Logged out']);
+        $request->user()->currentAccessToken()?->delete();
+
+        return response()->json([
+            'message' => 'Logged out'
+        ]);
     }
 }
