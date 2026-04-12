@@ -226,56 +226,68 @@ class OrderController extends Controller
             'items.*.unit_price' => ['nullable', 'numeric', 'min:0'],
         ]);
 
-        $orderItems = $order->items()
-            ->with('projectItem')
-            ->get()
-            ->keyBy('id');
+        return DB::transaction(function () use ($data, $order) {
+            $lockedOrder = Order::whereKey($order->id)
+                ->lockForUpdate()
+                ->first();
 
-        $remainingActiveItems = $orderItems->count();
+            $orderItems = $lockedOrder->items()
+                ->with('projectItem.material')
+                ->get()
+                ->keyBy('id');
 
-        foreach ($data['items'] as $payload) {
-            $orderItemId = (int) $payload['order_item_id'];
-            $qty = (int) $payload['qty'];
+            $remainingActiveItems = $orderItems->count();
 
-            $orderItem = $orderItems->get($orderItemId);
+            foreach ($data['items'] as $payload) {
+                $orderItemId = (int) $payload['order_item_id'];
+                $qty = (int) $payload['qty'];
 
-            if (!$orderItem) {
+                $orderItem = $orderItems->get($orderItemId);
+
+                if (!$orderItem) {
+                    return response()->json([
+                        'message' => "Order item ID {$orderItemId} tidak ditemukan di order ini"
+                    ], 422);
+                }
+
+                $projectItem = ProjectItem::whereKey($orderItem->project_item_id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (!$projectItem) {
+                    return response()->json([
+                        'message' => "Project item untuk order item ID {$orderItemId} tidak ditemukan"
+                    ], 422);
+                }
+
+                if ($qty === 0) {
+                    $remainingActiveItems--;
+                    continue;
+                }
+
+                $needed = (int) $projectItem->qty_needed;
+                $purchased = (int) $projectItem->qty_purchased;
+
+                $reservedByOthers = $this->getReservedQtyForProjectItem(
+                    $projectItem->id,
+                    $lockedOrder->id
+                );
+
+                $availableToReserve = max(0, $needed - $purchased - $reservedByOthers);
+
+                if ($qty > $availableToReserve) {
+                    return response()->json([
+                        'message' => "Qty untuk item '{$orderItem->name_snapshot}' melebihi sisa kebutuhan yang tersedia untuk dibooking ({$availableToReserve})"
+                    ], 422);
+                }
+            }
+
+            if ($remainingActiveItems <= 0) {
                 return response()->json([
-                    'message' => "Order item ID {$orderItemId} tidak ditemukan di order ini"
+                    'message' => 'Order tidak boleh kosong. Sisakan minimal 1 item.'
                 ], 422);
             }
 
-            $projectItem = $orderItem->projectItem;
-
-            if (!$projectItem) {
-                return response()->json([
-                    'message' => "Project item untuk order item ID {$orderItemId} tidak ditemukan"
-                ], 422);
-            }
-
-            $remaining = max(
-                0,
-                (int) $projectItem->qty_needed - (int) $projectItem->qty_purchased
-            );
-
-            if ($qty > 0 && $qty > $remaining) {
-                return response()->json([
-                    'message' => "Qty untuk item '{$orderItem->name_snapshot}' melebihi sisa kebutuhan ({$remaining})"
-                ], 422);
-            }
-
-            if ($qty === 0) {
-                $remainingActiveItems--;
-            }
-        }
-
-        if ($remainingActiveItems <= 0) {
-            return response()->json([
-                'message' => 'Order tidak boleh kosong. Sisakan minimal 1 item.'
-            ], 422);
-        }
-
-        return DB::transaction(function () use ($data, $order, $orderItems) {
             foreach ($data['items'] as $payload) {
                 $orderItemId = (int) $payload['order_item_id'];
                 $qty = (int) $payload['qty'];
@@ -300,18 +312,18 @@ class OrderController extends Controller
                 ]);
             }
 
-            $newSubtotal = (float) $order->items()->sum('line_total');
-            $shippingFee = (float) ($order->shipping_fee ?? 0);
+            $newSubtotal = (float) $lockedOrder->items()->sum('line_total');
+            $shippingFee = (float) ($lockedOrder->shipping_fee ?? 0);
             $newTotalAmount = $newSubtotal + $shippingFee;
 
-            $order->update([
+            $lockedOrder->update([
                 'subtotal' => $newSubtotal,
                 'total_amount' => $newTotalAmount,
             ]);
 
             return response()->json([
                 'message' => 'Order berhasil direvisi',
-                'order' => $order->fresh()->load(['items.material', 'items.projectItem', 'project']),
+                'order' => $lockedOrder->fresh()->load(['items.material', 'items.projectItem', 'project']),
             ]);
         });
     }
@@ -333,19 +345,65 @@ class OrderController extends Controller
             ], 422);
         }
 
-        $shippingFee = (float) ($data['shipping_fee'] ?? 0);
-        $totalAmount = (float) $order->subtotal + $shippingFee;
+        return DB::transaction(function () use ($data, $order) {
+            $lockedOrder = Order::whereKey($order->id)
+                ->lockForUpdate()
+                ->first();
 
-        $order->update([
-            'shipping_fee' => $shippingFee,
-            'total_amount' => $totalAmount,
-            'status' => Order::STATUS_WAITING_PAYMENT,
-        ]);
+            $lockedOrder->load(['items.projectItem.material']);
 
-        return response()->json([
-            'message' => 'Order set to waiting_payment',
-            'order' => $order->fresh()->load(['items.material', 'items.projectItem', 'project'])
-        ]);
+            foreach ($lockedOrder->items as $item) {
+                $projectItem = ProjectItem::whereKey($item->project_item_id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (!$projectItem) {
+                    return response()->json([
+                        'message' => "Project item untuk '{$item->name_snapshot}' tidak ditemukan"
+                    ], 422);
+                }
+
+                $needed = (int) $projectItem->qty_needed;
+                $purchased = (int) $projectItem->qty_purchased;
+
+                $reservedByOthers = OrderItem::query()
+                    ->where('project_item_id', $projectItem->id)
+                    ->where('order_id', '!=', $lockedOrder->id)
+                    ->whereHas('order', function ($q) {
+                        $q->whereIn('status', [
+                            Order::STATUS_WAITING_PAYMENT,
+                            Order::STATUS_PAID,
+                            Order::STATUS_PROCESSING,
+                            Order::STATUS_SHIPPED,
+                            Order::STATUS_READY_PICKUP,
+                        ]);
+                    })
+                    ->sum('qty');
+
+                $availableToReserve = max(0, $needed - $purchased - (int) $reservedByOthers);
+                $thisOrderQty = (int) $item->qty;
+
+                if ($thisOrderQty > $availableToReserve) {
+                    return response()->json([
+                        'message' => "Qty item '{$item->name_snapshot}' melebihi sisa kebutuhan yang tersedia untuk dibooking ({$availableToReserve})"
+                    ], 422);
+                }
+            }
+
+            $shippingFee = (float) ($data['shipping_fee'] ?? 0);
+            $totalAmount = (float) $lockedOrder->subtotal + $shippingFee;
+
+            $lockedOrder->update([
+                'shipping_fee' => $shippingFee,
+                'total_amount' => $totalAmount,
+                'status' => Order::STATUS_WAITING_PAYMENT,
+            ]);
+
+            return response()->json([
+                'message' => 'Order set to waiting_payment',
+                'order' => $lockedOrder->fresh()->load(['items.material', 'items.projectItem', 'project'])
+            ]);
+        });
     }
 
     public function markPaid(Order $order) {
@@ -712,26 +770,31 @@ class OrderController extends Controller
         ]);
     }
 
-    private function applyOrderItemsToProject(Order $order): void{
+    private function applyOrderItemsToProject(Order $order): void {
         $orderItems = $order->items()->with('projectItem')->get();
 
         foreach ($orderItems as $orderItem) {
-            $projectItem = $orderItem->projectItem;
+            $projectItem = ProjectItem::whereKey($orderItem->project_item_id)
+                ->lockForUpdate()
+                ->first();
 
             if (!$projectItem) {
-                continue;
+                throw new \Exception("Project item untuk '{$orderItem->name_snapshot}' tidak ditemukan");
             }
 
             $currentPurchased = (int) $projectItem->qty_purchased;
             $qtyToApply = (int) $orderItem->qty;
             $needed = (int) $projectItem->qty_needed;
 
-            $newPurchased = $currentPurchased + $qtyToApply;
+            $remaining = max(0, $needed - $currentPurchased);
 
-            if ($newPurchased > $needed) {
-                $newPurchased = $needed;
+            if ($qtyToApply > $remaining) {
+                throw new \Exception(
+                    "Qty item '{$orderItem->name_snapshot}' melebihi sisa kebutuhan saat complete ({$remaining})"
+                );
             }
 
+            $newPurchased = $currentPurchased + $qtyToApply;
             $newStatus = $this->calculateProjectItemStatus($needed, $newPurchased);
 
             $projectItem->update([
@@ -744,10 +807,69 @@ class OrderController extends Controller
             'is_applied_to_project' => true,
             'applied_to_project_at' => now(),
         ]);
-        
+
         if ($order->project) {
             $this->refreshProjectStatus($order->project);
         }
+    }
+
+    private function getReservedStatuses(): array {
+        return [
+            Order::STATUS_WAITING_PAYMENT,
+            Order::STATUS_PAID,
+            Order::STATUS_PROCESSING,
+            Order::STATUS_SHIPPED,
+            Order::STATUS_READY_PICKUP,
+        ];
+    }
+
+    private function getReservedQtyForProjectItem(int $projectItemId, ?int $excludeOrderId = null): int {
+        $query = OrderItem::query()
+            ->where('project_item_id', $projectItemId)
+            ->whereHas('order', function ($q) {
+                $q->whereIn('status', $this->getReservedStatuses());
+            });
+
+        if ($excludeOrderId) {
+            $query->where('order_id', '!=', $excludeOrderId);
+        }
+
+        return (int) $query->sum('qty');
+    }
+
+    private function validateOrderCanBeReserved(Order $order): ?array {
+        $order->loadMissing(['items.projectItem.material']);
+
+        foreach ($order->items as $orderItem) {
+            $projectItem = $orderItem->projectItem;
+
+            if (!$projectItem) {
+                return [
+                    'ok' => false,
+                    'message' => "Project item untuk '{$orderItem->name_snapshot}' tidak ditemukan"
+                ];
+            }
+
+            $needed = (int) $projectItem->qty_needed;
+            $purchased = (int) $projectItem->qty_purchased;
+
+            $reservedByOthers = $this->getReservedQtyForProjectItem(
+                $projectItem->id,
+                $order->id
+            );
+
+            $availableToReserve = max(0, $needed - $purchased - $reservedByOthers);
+            $thisOrderQty = (int) $orderItem->qty;
+
+            if ($thisOrderQty > $availableToReserve) {
+                return [
+                    'ok' => false,
+                    'message' => "Qty item '{$orderItem->name_snapshot}' melebihi sisa kebutuhan yang tersedia untuk dibooking ({$availableToReserve})"
+                ];
+            }
+        }
+
+        return null;
     }
 
     private function refreshProjectStatus(Project $project): void {
