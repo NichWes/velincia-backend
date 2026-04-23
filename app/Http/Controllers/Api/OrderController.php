@@ -331,6 +331,7 @@ class OrderController extends Controller
     public function setWaitingPayment(Request $request, Order $order) {
         $data = $request->validate([
             'shipping_fee' => ['nullable', 'numeric', 'min:0'],
+            'auto_create_payment_token' => ['nullable', 'boolean'],
         ]);
 
         if ($order->status !== Order::STATUS_WAITING_ADMIN) {
@@ -345,65 +346,106 @@ class OrderController extends Controller
             ], 422);
         }
 
-        return DB::transaction(function () use ($data, $order) {
-            $lockedOrder = Order::whereKey($order->id)
-                ->lockForUpdate()
-                ->first();
+        $autoCreatePaymentToken = $data['auto_create_payment_token'] ?? true;
 
-            $lockedOrder->load(['items.projectItem.material']);
-
-            foreach ($lockedOrder->items as $item) {
-                $projectItem = ProjectItem::whereKey($item->project_item_id)
+        try {
+            $lockedOrder = DB::transaction(function () use ($data, $order) {
+                $lockedOrder = Order::whereKey($order->id)
                     ->lockForUpdate()
                     ->first();
 
-                if (!$projectItem) {
-                    return response()->json([
-                        'message' => "Project item untuk '{$item->name_snapshot}' tidak ditemukan"
-                    ], 422);
+                $lockedOrder->load(['items.projectItem.material', 'user']);
+
+                if ($lockedOrder->status !== Order::STATUS_WAITING_ADMIN) {
+                    throw new \RuntimeException('Order harus status waiting_admin');
                 }
 
-                $needed = (int) $projectItem->qty_needed;
-                $purchased = (int) $projectItem->qty_purchased;
-
-                $reservedByOthers = OrderItem::query()
-                    ->where('project_item_id', $projectItem->id)
-                    ->where('order_id', '!=', $lockedOrder->id)
-                    ->whereHas('order', function ($q) {
-                        $q->whereIn('status', [
-                            Order::STATUS_WAITING_PAYMENT,
-                            Order::STATUS_PAID,
-                            Order::STATUS_PROCESSING,
-                            Order::STATUS_SHIPPED,
-                            Order::STATUS_READY_PICKUP,
-                        ]);
-                    })
-                    ->sum('qty');
-
-                $availableToReserve = max(0, $needed - $purchased - (int) $reservedByOthers);
-                $thisOrderQty = (int) $item->qty;
-
-                if ($thisOrderQty > $availableToReserve) {
-                    return response()->json([
-                        'message' => "Qty item '{$item->name_snapshot}' melebihi sisa kebutuhan yang tersedia untuk dibooking ({$availableToReserve})"
-                    ], 422);
+                if ($lockedOrder->items->isEmpty()) {
+                    throw new \RuntimeException('Order tidak memiliki item');
                 }
-            }
 
-            $shippingFee = (float) ($data['shipping_fee'] ?? 0);
-            $totalAmount = (float) $lockedOrder->subtotal + $shippingFee;
+                foreach ($lockedOrder->items as $item) {
+                    $projectItem = ProjectItem::whereKey($item->project_item_id)
+                        ->lockForUpdate()
+                        ->first();
 
-            $lockedOrder->update([
-                'shipping_fee' => $shippingFee,
-                'total_amount' => $totalAmount,
-                'status' => Order::STATUS_WAITING_PAYMENT,
+                    if (!$projectItem) {
+                        throw new \RuntimeException("Project item untuk '{$item->name_snapshot}' tidak ditemukan");
+                    }
+                }
+
+                $validation = $this->validateOrderCanBeReserved($lockedOrder);
+
+                if ($validation !== null) {
+                    throw new \RuntimeException($validation);
+                }
+
+                $shippingFee = (float) ($data['shipping_fee'] ?? 0);
+                $totalAmount = (float) $lockedOrder->subtotal + $shippingFee;
+
+                if ($totalAmount <= 0) {
+                    throw new \RuntimeException('Total amount tidak valid');
+                }
+
+                $lockedOrder->update([
+                    'shipping_fee' => $shippingFee,
+                    'total_amount' => $totalAmount,
+                    'status' => Order::STATUS_WAITING_PAYMENT,
+                ]);
+
+                return $lockedOrder->fresh()->load([
+                    'items.material',
+                    'items.projectItem',
+                    'project',
+                    'user',
+                ]);
+            });
+        } catch (\RuntimeException $e) {
+            return response()->json([
+                'message' => $e->getMessage(),
+            ], 422);
+        } catch (\Throwable $e) {
+            \Log::error('setWaitingPayment failed', [
+                'order_id' => $order->id,
+                'error' => $e->getMessage(),
             ]);
 
             return response()->json([
+                'message' => 'Terjadi kesalahan saat memproses waiting payment',
+            ], 500);
+        }
+
+        if (!$autoCreatePaymentToken) {
+            return response()->json([
                 'message' => 'Order set to waiting_payment',
-                'order' => $lockedOrder->fresh()->load(['items.material', 'items.projectItem', 'project'])
+                'order' => $lockedOrder,
             ]);
-        });
+        }
+
+        try {
+            $payment = $this->generatePaymentTokenForOrder($lockedOrder);
+
+            return response()->json([
+                'message' => $payment['already_exists']
+                    ? 'Order set to waiting_payment, payment token sudah tersedia'
+                    : 'Order set to waiting_payment dan payment token berhasil dibuat',
+                'order' => $lockedOrder->fresh()->load(['items.material', 'items.projectItem', 'project']),
+                'snap_token' => $payment['snap_token'],
+                'payment_url' => $payment['payment_url'],
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('Auto payment token creation failed after waiting payment', [
+                'order_id' => $lockedOrder->id,
+                'order_code' => $lockedOrder->order_code,
+                'error' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'Order set to waiting_payment, tapi gagal membuat payment token',
+                'error' => $e->getMessage(),
+                'order' => $lockedOrder->fresh()->load(['items.material', 'items.projectItem', 'project']),
+            ], 500);
+        }
     }
 
     public function markPaid(Order $order) {
@@ -612,82 +654,29 @@ class OrderController extends Controller
     }
 
     public function createPaymentToken(Order $order) {
-        if ($order->status !== Order::STATUS_WAITING_PAYMENT) {
-            return response()->json([
-                'message' => 'Order harus status waiting_payment untuk membuat payment token'
-            ], 422);
-        }
-
-        if ($order->total_amount <= 0) {
-            return response()->json([
-                'message' => 'Total amount tidak valid'
-            ], 422);
-        }
-
-        $order->loadMissing(['user', 'items']);
-        $this->initMidtransConfig();
-
-        $customer = $order->user;
-
-        $params = [
-            'transaction_details' => [
-                'order_id' => $order->order_code,
-                'gross_amount' => (int) round($order->total_amount),
-            ],
-            'customer_details' => [
-                'first_name' => $customer->name ?? 'Customer',
-                'email' => $customer->email ?? 'customer@example.com',
-                'phone' => $customer->phone ?? '',
-            ],
-            'item_details' => $order->items->map(function ($item) {
-                return [
-                    'id' => (string) $item->id,
-                    'price' => (int) round($item->unit_price),
-                    'quantity' => (int) $item->qty,
-                    'name' => $item->name_snapshot,
-                ];
-            })->values()->all(),
-            'callbacks' => [
-                'finish' => config('midtrans.finish_url'),
-                'unfinish' => config('midtrans.unfinish_url'),
-                'error' => config('midtrans.error_url'),
-            ],
-        ];
-
-        if ((float) $order->shipping_fee > 0) {
-            $params['item_details'][] = [
-                'id' => 'shipping',
-                'price' => (int) round($order->shipping_fee),
-                'quantity' => 1,
-                'name' => 'Shipping Fee',
-            ];
-        }
-
         try {
-            $transaction = Snap::createTransaction($params);
-
-            $order->update([
-                'payment_token' => $transaction->token,
-                'payment_url' => $transaction->redirect_url,
-                'transaction_status' => 'token_created',
-            ]);
+            $payment = $this->generatePaymentTokenForOrder($order);
 
             return response()->json([
-                'message' => 'Payment token created',
+                'message' => $payment['already_exists']
+                    ? 'Payment token already exists'
+                    : 'Payment token created',
                 'order' => $order->fresh()->load(['items.material', 'items.projectItem', 'project']),
-                'snap_token' => $transaction->token,
-                'payment_url' => $transaction->redirect_url,
+                'snap_token' => $payment['snap_token'],
+                'payment_url' => $payment['payment_url'],
+                'transaction_status' => $order->fresh()->transaction_status,
                 'client_key' => config('midtrans.client_key'),
             ]);
-
         } catch (\Exception $e) {
+            \Log::error('Midtrans token creation failed', [
+                'order_id' => $order->id,
+                'order_code' => $order->order_code,
+                'error' => $e->getMessage(),
+            ]);
+
             return response()->json([
                 'message' => 'Gagal membuat payment token',
                 'error' => $e->getMessage(),
-                'server_key_exists' => !empty(config('midtrans.server_key')),
-                'server_key_prefix' => substr((string) config('midtrans.server_key'), 0, 13),
-                'client_key_prefix' => substr((string) config('midtrans.client_key'), 0, 13),
-                'is_production' => config('midtrans.is_production'),
             ], 500);
         }
     }
@@ -837,17 +826,86 @@ class OrderController extends Controller
         return (int) $query->sum('qty');
     }
 
-    private function validateOrderCanBeReserved(Order $order): ?array {
+    private function generatePaymentTokenForOrder(Order $order): array {
+        if ($order->status !== Order::STATUS_WAITING_PAYMENT) {
+            throw new \Exception('Order harus status waiting_payment');
+        }
+
+        if ($order->total_amount <= 0) {
+            throw new \Exception('Total amount tidak valid');
+        }
+
+        $order->loadMissing(['user', 'items.material', 'items.projectItem', 'project']);
+
+        if (!empty($order->payment_token) && !empty($order->payment_url)) {
+            return [
+                'snap_token' => $order->payment_token,
+                'payment_url' => $order->payment_url,
+                'already_exists' => true,
+            ];
+        }
+
+        $this->initMidtransConfig();
+
+        $customer = $order->user;
+
+        $params = [
+            'transaction_details' => [
+                'order_id' => $order->order_code,
+                'gross_amount' => (int) round($order->total_amount),
+            ],
+            'customer_details' => [
+                'first_name' => $customer->name ?? 'Customer',
+                'email' => $customer->email ?? 'customer@example.com',
+                'phone' => $customer->phone ?? '',
+            ],
+            'item_details' => $order->items->map(function ($item) {
+                return [
+                    'id' => (string) $item->id,
+                    'price' => (int) round($item->unit_price),
+                    'quantity' => (int) $item->qty,
+                    'name' => $item->name_snapshot,
+                ];
+            })->values()->all(),
+            'callbacks' => [
+                'finish' => config('midtrans.finish_url'),
+                'unfinish' => config('midtrans.unfinish_url'),
+                'error' => config('midtrans.error_url'),
+            ],
+        ];
+
+        if ((float) $order->shipping_fee > 0) {
+            $params['item_details'][] = [
+                'id' => 'shipping',
+                'price' => (int) round($order->shipping_fee),
+                'quantity' => 1,
+                'name' => 'Shipping Fee',
+            ];
+        }
+
+        $transaction = Snap::createTransaction($params);
+
+        $order->update([
+            'payment_token' => $transaction->token,
+            'payment_url' => $transaction->redirect_url,
+            'transaction_status' => 'token_created',
+        ]);
+
+        return [
+            'snap_token' => $transaction->token,
+            'payment_url' => $transaction->redirect_url,
+            'already_exists' => false,
+        ];
+    }
+
+    private function validateOrderCanBeReserved(Order $order): ?string {
         $order->loadMissing(['items.projectItem.material']);
 
         foreach ($order->items as $orderItem) {
             $projectItem = $orderItem->projectItem;
 
             if (!$projectItem) {
-                return [
-                    'ok' => false,
-                    'message' => "Project item untuk '{$orderItem->name_snapshot}' tidak ditemukan"
-                ];
+                return "Project item untuk '{$orderItem->name_snapshot}' tidak ditemukan";
             }
 
             $needed = (int) $projectItem->qty_needed;
@@ -862,10 +920,7 @@ class OrderController extends Controller
             $thisOrderQty = (int) $orderItem->qty;
 
             if ($thisOrderQty > $availableToReserve) {
-                return [
-                    'ok' => false,
-                    'message' => "Qty item '{$orderItem->name_snapshot}' melebihi sisa kebutuhan yang tersedia untuk dibooking ({$availableToReserve})"
-                ];
+                return "Qty item '{$orderItem->name_snapshot}' melebihi sisa kebutuhan yang tersedia untuk dibooking ({$availableToReserve})";
             }
         }
 
