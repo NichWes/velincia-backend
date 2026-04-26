@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\ProjectController;
 use App\Http\Controllers\Api\ProjectItemController;
 use App\Http\Controllers\Api\MaterialController;
 use App\Http\Controllers\Api\OrderController;
+use App\Http\Controllers\Api\InvoiceController;
 
 // public routes
 Route::get('/ping', function () {
@@ -44,6 +45,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/orders/{order}', [OrderController::class, 'show']);
     Route::post('/orders', [OrderController::class, 'store']);
     Route::post('/orders/{order}/submit', [OrderController::class, 'submit']);
+    Route::post('/orders/{order}/generate-invoice', [InvoiceController::class, 'generate']);
+    Route::get('/orders/{order}/invoice', [InvoiceController::class, 'byOrder']);   
+
+    // invoice
+    Route::get('/invoices/{invoice}', [InvoiceController::class, 'show']);
+    Route::get('/invoices/{invoice}/download', [InvoiceController::class, 'download']);
 });
 
 // admin only routes

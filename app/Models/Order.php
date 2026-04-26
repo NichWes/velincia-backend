@@ -45,18 +45,19 @@ class Order extends Model {
     public const STATUS_COMPLETED = 'completed';
     public const STATUS_CANCELLED = 'cancelled';
 
-    public function items()
-    {
+    public function items() {
         return $this->hasMany(OrderItem::class);
     }
 
-    public function project()
-    {
+    public function project() {
         return $this->belongsTo(Project::class);
     }
 
-    public function user()
-    {
+    public function user() {
         return $this->belongsTo(User::class);
+    }
+
+    public function invoice() {
+        return $this->hasOne(Invoice::class);
     }
 }

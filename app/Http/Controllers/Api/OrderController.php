@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\InvoiceController;
 use App\Models\User;
 use App\Models\Material;
 use App\Models\Order;
@@ -753,6 +754,21 @@ class OrderController extends Controller
         }
 
         $order->update($updatePayload);
+
+        if (
+            isset($updatePayload['status']) &&
+            $updatePayload['status'] === Order::STATUS_PAID
+        ) {
+            try {
+                app(InvoiceController::class)->createInvoiceForOrder($order->fresh());
+            } catch (\Throwable $e) {
+                \Log::error('Auto invoice generation failed', [
+                    'order_id' => $order->id,
+                    'order_code' => $order->order_code,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
 
         return response()->json([
             'message' => 'Notification processed'

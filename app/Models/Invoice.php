@@ -6,5 +6,19 @@ use Illuminate\Database\Eloquent\Model;
 
 class Invoice extends Model
 {
-    //
+    protected $fillable = [
+        'order_id',
+        'invoice_number',
+        'pdf_url',
+        'generated_at',
+    ];
+
+    protected $casts = [
+        'generated_at' => 'datetime',
+    ];
+
+    public function order()
+    {
+        return $this->belongsTo(Order::class);
+    }
 }
